@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import re
 import json
 import time
+from collections import deque
 
 BASE_URL = "https://quotes.toscrape.com"
 INDEX_FILE = "index.json"
@@ -20,45 +21,50 @@ class Indexer:
         self.current_page_id = 0
 
     def build_index(self, url=BASE_URL):
-        if url in self.visited_urls:
-            return
-        print(f"Indexing page: {url}")
-        self.visited_urls.add(url)
+        queue = deque([url])
 
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        text = soup.get_text(separator=" ")
-        # Regex that removes punctuation but allows: 
-        # Apostrophes (e.g. it's)
-        # Hyphens (e.g. well-being)
-        # Commas (e.g. for numbers like 10,000) but doesnt allow commas at the end of words 
-        # Periods (e.g. for abbreviations and initials like J.M.)
-        words = re.findall(r"\b\w+(?:[-',.\w]*\w+)?\b", text.lower())
+        while queue:
+            current_url = queue.popleft()
 
-        page_id = self.index_url(url)
+            if current_url in self.visited_urls:
+                continue
 
-        for position, word in enumerate(words):
-            if word not in self.index:
-                self.index[word] = {}
-            if page_id not in self.index[word]:
-                self.index[word][page_id] = []
-            self.index[word][page_id].append(position)
+            self.visited_urls.add(current_url)
+            print("Indexing: ", current_url)
 
-        pages = self.get_pages(soup, url)
+            response = requests.get(current_url)
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = soup.get_text()
+            words = []
+            for word in text.lower().split():
+                # Removes punctuation from the start and end of the word
+                removed_punctuation = re.sub(r"^[^\w\d]+|[^\w\d]+$", "", word)
+                # If result is not empty
+                if removed_punctuation:
+                    words.append(removed_punctuation)
 
-        # Recursively index every page found on the current page (eventually indexing all pages)
-        for page in pages:
-            # Before indexing next page, apply politeness delay
-            time.sleep(POLITENESS_DELAY)
-            self.build_index(page)
+            page_id = self.index_url(current_url)
+
+            for position, word in enumerate(words):
+                if word not in self.index:
+                    self.index[word] = {}
+                if page_id not in self.index[word]:
+                    self.index[word][page_id] = []
+                self.index[word][page_id].append(position)
+
+            pages = self.get_pages(soup, current_url)
+            for page in pages:
+                if page not in self.visited_urls:
+                    queue.append(page)
+            
+            # time.sleep(POLITENESS_DELAY)
 
     def get_pages(self, soup, current_url):
         pages = set()
         for a_tag in soup.find_all("a", href=True):
             href = a_tag.get("href")
-            full_url = urljoin(current_url, href)
-
-            if full_url.startswith(BASE_URL) and full_url not in self.visited_urls:
+            full_url = urljoin(current_url, href).rstrip("/")
+            if full_url.startswith(BASE_URL):
                 pages.add(full_url)
         return pages
 
@@ -79,15 +85,42 @@ class Indexer:
         with open(URLS_FILE, "w") as urls_file:
             json.dump(self.urls, urls_file)
 
+    def load_index(self):
+        try:
+            with open(INDEX_FILE, "r") as index_file:
+                self.index = json.load(index_file)
+            with open(URLS_FILE, "r") as urls_file:
+                self.urls = json.load(urls_file)
+        except FileNotFoundError:
+            print("Index files not found. Please build the index first.")
+            return False
+        return True
+    
+    def print_word_index(self, word):
+        if word not in self.index:
+            print("Word not found in index.")
+            return
+
+        for page_id, positions in self.index[word].items():
+            url = self.urls[page_id]
+            print(f"{url}: {positions}")
+
+    def find(self, query):
+        words = query.split()
+
+
+
+
+
 
 def main():
     indexer = Indexer()
-    start_time = time.time()
-    indexer.build_index()
-    end_time = time.time()
-    print(f"Indexing took {end_time - start_time:.2f} seconds")
-    indexer.save_index()
-    print("Indexing complete.")
+    # indexer.build_index()
+    # indexer.save_index()
+    # print("Indexing complete.")
+
+    indexer.load_index()
+    indexer.print_word_index("the")
 
 
 if __name__ == "__main__":
