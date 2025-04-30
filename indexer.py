@@ -11,7 +11,6 @@ INDEX_FILE = "index.json"
 URLS_FILE = "urls.json"
 POLITENESS_DELAY = 6
 
-
 class Indexer: 
     def __init__(self):
         self.index = {}
@@ -19,6 +18,7 @@ class Indexer:
         self.url_to_index = {}
         self.visited_urls = set()
         self.current_page_id = 0
+        self.index_loaded = False
 
     def build_index(self, url=BASE_URL):
         queue = deque([url])
@@ -57,7 +57,7 @@ class Indexer:
                 if page not in self.visited_urls:
                     queue.append(page)
             
-            # time.sleep(POLITENESS_DELAY)
+            time.sleep(POLITENESS_DELAY)
 
     def get_pages(self, soup, current_url):
         pages = set()
@@ -91,37 +91,64 @@ class Indexer:
                 self.index = json.load(index_file)
             with open(URLS_FILE, "r") as urls_file:
                 self.urls = json.load(urls_file)
+            self.index_loaded = True
         except FileNotFoundError:
-            print("Index files not found. Please build the index first.")
-            return False
-        return True
+            print("Index file not found run build to build the index first.")
     
-    def print_word_index(self, word):
+    def get_link_by_id(self, page_id):
+        if page_id not in self.urls:
+            print("Page ID not found.")
+            return
+        return self.urls[page_id]
+
+    def get_word_index(self, word):
         if word not in self.index:
             print("Word not found in index.")
             return
+        return self.index[word]
 
-        for page_id, positions in self.index[word].items():
-            url = self.urls[page_id]
-            print(f"{url}: {positions}")
+    def get_if_index_loaded(self):
+        return self.index_loaded 
 
     def find(self, query):
         words = query.split()
+        page_ranks = {}
 
+        for word in words:
+            if word not in self.index:
+                print(f"{word} not found in index, skipping")
+                continue
 
+            for page_id, positions in self.index[word].items():
+                if page_id not in page_ranks:
+                    page_ranks[page_id] = 0
+                page_ranks[page_id] += len(positions)
 
+        if len(words) > 1:
+            page_ranks = self.multiword_query_ranking(words, page_ranks)
+            
+        return page_ranks
 
+    def multiword_query_ranking(self, words, page_ranks):
+        for page_id in list(page_ranks):
+                word_positions = []
+                for word in words:
+                    if word in self.index and page_id in self.index[word]:
+                        word_positions.append(self.index[word][page_id])
+                
+                match_count_bonus = len(word_positions) if len(word_positions) > 1 else 0
+                page_ranks[page_id] += match_count_bonus * 5
 
-
-def main():
-    indexer = Indexer()
-    # indexer.build_index()
-    # indexer.save_index()
-    # print("Indexing complete.")
-
-    indexer.load_index()
-    indexer.print_word_index("the")
-
-
-if __name__ == "__main__":
-    main()  
+                complete_phrase_bonus = 0
+                if len(word_positions) == len(words):
+                    for start_pos in word_positions[0]:
+                        matched = 1
+                        for i in range(1, len(word_positions)):
+                            if (start_pos + i) in word_positions[i]:
+                                matched += 1
+                            else:
+                                break
+                        if matched == len(word_positions):
+                            complete_phrase_bonus += 100
+                page_ranks[page_id] += complete_phrase_bonus
+        return page_ranks
